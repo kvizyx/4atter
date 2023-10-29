@@ -7,6 +7,7 @@ import (
 	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
+	"time"
 )
 
 const (
@@ -82,7 +83,14 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%s", host, *port)
 
-	room := NewRoom()
+	room := NewRoom(&RoomSettings{
+		MessageLimit:        1.0,
+		CooldownTime:        30.0,
+		CooldownHitsLimit:   5,
+		CooldownHitsBanTime: 5 * time.Second,
+		MaxConnection:       2,
+	})
+
 	go room.Serve()
 
 	http.HandleFunc("/", handleUpgrade(room.Messages))

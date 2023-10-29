@@ -16,31 +16,34 @@ const (
 	NewMessage
 )
 
-const (
-	MessageLimit = 1.0
-	CooldownTime = 30.0
-
-	CooldownHitsLimit   = 5
-	CooldownHitsBanTime = 5 * time.Second
-)
-
 type Message struct {
 	Type   MessageType
 	Text   string
 	Sender *Client
 }
 
+type RoomSettings struct {
+	MessageLimit        float64
+	CooldownTime        float64
+	CooldownHitsLimit   int
+	CooldownHitsBanTime time.Duration
+	MaxConnection       int
+}
+
 type Room struct {
 	Clients       map[uuid.UUID]*Client
 	BannedClients map[ClientIP]time.Time
 	Messages      chan Message
+
+	Settings *RoomSettings
 }
 
-func NewRoom() *Room {
+func NewRoom(settings *RoomSettings) *Room {
 	return &Room{
 		Clients:       make(map[uuid.UUID]*Client),
 		BannedClients: make(map[ClientIP]time.Time),
 		Messages:      make(chan Message),
+		Settings:      settings,
 	}
 }
 
@@ -60,6 +63,11 @@ func (r *Room) Serve() {
 }
 
 func (r *Room) handleConnect(msg Message) {
+	if len(r.Clients) == r.Settings.MaxConnection {
+		msg.Sender.Conn.WriteMessage(websocket.TextMessage, []byte("Room is full"))
+		msg.Sender.Conn.Close()
+	}
+
 	bannedUntil, isBanned := r.BannedClients[msg.Sender.IP()]
 	if isBanned {
 		secondsLeft := bannedUntil.Sub(time.Now()).Seconds()
@@ -95,7 +103,7 @@ func (r *Room) handleNewMessage(msg Message) {
 		return
 	}
 
-	if time.Now().Sub(sender.LastMessageTime).Seconds() < MessageLimit {
+	if time.Now().Sub(sender.LastMessageTime).Seconds() < r.Settings.MessageLimit {
 		return
 	}
 
@@ -106,11 +114,11 @@ func (r *Room) handleNewMessage(msg Message) {
 			return
 		}
 
-		if time.Now().Sub(sender.CooldownStart).Seconds() < CooldownTime {
+		if time.Now().Sub(sender.CooldownStart).Seconds() < r.Settings.CooldownTime {
 			sender.CooldownHits += 1
 
-			if sender.CooldownHits >= CooldownHitsLimit {
-				r.banClient(sender, CooldownHitsBanTime, "spamming")
+			if sender.CooldownHits >= r.Settings.CooldownHitsLimit {
+				r.banClient(sender, r.Settings.CooldownHitsBanTime, "spamming")
 			}
 
 			return
