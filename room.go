@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gofrs/uuid"
 	"github.com/gorilla/websocket"
 	"log"
@@ -15,22 +16,13 @@ const (
 	NewMessage
 )
 
-// all values represent seconds
 const (
 	MessageLimit = 1.0
-	CooldownTime = 10.0
+	CooldownTime = 30.0
+
+	CooldownHitsLimit   = 5
+	CooldownHitsBanTime = 5 * time.Second
 )
-
-type Client struct {
-	ID   uuid.UUID
-	Conn *websocket.Conn
-
-	LastMessageTime time.Time
-	LastMessageText string
-
-	CooldownMessage string
-	CooldownStart   time.Time
-}
 
 type Message struct {
 	Type   MessageType
@@ -39,14 +31,16 @@ type Message struct {
 }
 
 type Room struct {
-	Clients  map[uuid.UUID]*Client
-	Messages chan Message
+	Clients       map[uuid.UUID]*Client
+	BannedClients map[ClientIP]time.Time
+	Messages      chan Message
 }
 
 func NewRoom() *Room {
 	return &Room{
-		Clients:  make(map[uuid.UUID]*Client),
-		Messages: make(chan Message),
+		Clients:       make(map[uuid.UUID]*Client),
+		BannedClients: make(map[ClientIP]time.Time),
+		Messages:      make(chan Message),
 	}
 }
 
@@ -66,6 +60,23 @@ func (r *Room) Serve() {
 }
 
 func (r *Room) handleConnect(msg Message) {
+	bannedUntil, isBanned := r.BannedClients[msg.Sender.IP()]
+	if isBanned {
+		secondsLeft := bannedUntil.Sub(time.Now()).Seconds()
+
+		if secondsLeft <= 0 {
+			delete(r.BannedClients, msg.Sender.IP())
+		} else {
+			message := fmt.Sprintf(
+				"You are banned from this room. %d seconds left",
+				int(secondsLeft),
+			)
+			msg.Sender.Conn.WriteMessage(websocket.TextMessage, []byte(message))
+			msg.Sender.Conn.Close()
+			return
+		}
+	}
+
 	msg.Sender.LastMessageTime = time.Now()
 	r.Clients[msg.Sender.ID] = msg.Sender
 
@@ -78,38 +89,46 @@ func (r *Room) handleDisconnect(msg Message) {
 }
 
 func (r *Room) handleNewMessage(msg Message) {
+	sender := msg.Sender
+
 	if len(msg.Text) == 0 {
 		return
 	}
 
-	if time.Now().Sub(msg.Sender.LastMessageTime).Seconds() < MessageLimit {
+	if time.Now().Sub(sender.LastMessageTime).Seconds() < MessageLimit {
 		return
 	}
 
-	if msg.Text == msg.Sender.LastMessageText {
-		if msg.Sender.CooldownMessage == "" {
-			msg.Sender.CooldownMessage = msg.Text
-			msg.Sender.CooldownStart = time.Now()
+	if msg.Text == sender.LastMessageText {
+		if sender.CooldownMessage == "" {
+			sender.CooldownMessage = msg.Text
+			sender.CooldownStart = time.Now()
 			return
 		}
 
-		if time.Now().Sub(msg.Sender.CooldownStart).Seconds() < CooldownTime {
+		if time.Now().Sub(sender.CooldownStart).Seconds() < CooldownTime {
+			sender.CooldownHits += 1
+
+			if sender.CooldownHits >= CooldownHitsLimit {
+				r.banClient(sender, CooldownHitsBanTime, "spamming")
+			}
+
 			return
 		}
 
-		msg.Sender.CooldownMessage = ""
+		sender.CooldownMessage = ""
 	}
 
-	msg.Sender.LastMessageTime = time.Now()
-	msg.Sender.LastMessageText = msg.Text
+	sender.LastMessageTime = time.Now()
+	sender.LastMessageText = msg.Text
 
 	log.Printf(
 		"Broadcasting message from %s: %s\n",
-		msg.Sender.ID, msg.Text,
+		sender.ID, msg.Text,
 	)
 
 	for _, client := range r.Clients {
-		if client.ID == msg.Sender.ID {
+		if client.ID == sender.ID {
 			continue
 		}
 
@@ -122,4 +141,29 @@ func (r *Room) handleNewMessage(msg Message) {
 			client.Conn.Close()
 		}
 	}
+}
+
+func (r *Room) banClient(
+	client *Client,
+	duration time.Duration,
+	reason string,
+) {
+	r.BannedClients[client.IP()] = time.Now().Add(duration)
+
+	log.Printf(
+		"Client %s have been banned. Reason: %s, Duration: %s\n",
+		client.ID, reason, duration,
+	)
+
+	banMessage := fmt.Sprintf(
+		"You have been banned. Reason: %s, Duration: %s",
+		reason, duration,
+	)
+
+	_ = client.Conn.WriteMessage(
+		websocket.TextMessage,
+		[]byte(banMessage),
+	)
+
+	client.Conn.Close()
 }

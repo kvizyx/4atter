@@ -4,6 +4,6 @@ Simple multiuser chat built on websockets (inspired by [Tsoding's](https://twitc
 
 # How to launch
 ```console
-go run . --port <port>
+$ go run . --port <port>
 ```
 Port flag is optional, by default it will run on '7777'

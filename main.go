@@ -44,16 +44,12 @@ func handleConnection(conn *websocket.Conn, messages chan Message) {
 	}
 
 	for {
-		msgType, data, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				return
-			}
+			//if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			//	return
+			//}
 
-			log.Printf(
-				"Failed to read message of type %d from %s: %s\n",
-				msgType, conn.RemoteAddr().String(), err,
-			)
 			return
 		}
 
