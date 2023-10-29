@@ -27,7 +27,7 @@ type RoomSettings struct {
 	CooldownTime        float64
 	CooldownHitsLimit   int
 	CooldownHitsBanTime time.Duration
-	MaxConnection       int
+	MaxClients          int
 }
 
 type Room struct {
@@ -63,7 +63,7 @@ func (r *Room) Serve() {
 }
 
 func (r *Room) handleConnect(msg Message) {
-	if len(r.Clients) == r.Settings.MaxConnection {
+	if len(r.Clients) == r.Settings.MaxClients {
 		msg.Sender.Conn.WriteMessage(websocket.TextMessage, []byte("Room is full"))
 		msg.Sender.Conn.Close()
 	}
@@ -73,7 +73,7 @@ func (r *Room) handleConnect(msg Message) {
 		secondsLeft := bannedUntil.Sub(time.Now()).Seconds()
 
 		if secondsLeft <= 0 {
-			delete(r.BannedClients, msg.Sender.IP())
+			r.unbanClient(msg.Sender.IP())
 		} else {
 			message := fmt.Sprintf(
 				"You are banned from this room. %d seconds left",
@@ -174,4 +174,8 @@ func (r *Room) banClient(
 	)
 
 	client.Conn.Close()
+}
+
+func (r *Room) unbanClient(clientIP ClientIP) {
+	delete(r.BannedClients, clientIP)
 }

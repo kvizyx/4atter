@@ -88,7 +88,7 @@ func main() {
 		CooldownTime:        30.0,
 		CooldownHitsLimit:   5,
 		CooldownHitsBanTime: 5 * time.Second,
-		MaxConnection:       2,
+		MaxClients:          10,
 	})
 
 	go room.Serve()
