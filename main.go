@@ -3,11 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/gofrs/uuid"
-	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
-	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -24,16 +23,12 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleConnection(conn *websocket.Conn, messages chan Message) {
-	senderID, _ := uuid.NewV4()
-	sender := &Client{
-		ID:   senderID,
-		Conn: conn,
-	}
+	client := NewClient(conn)
 
 	defer func() {
 		messages <- Message{
 			Type:   ClientDisconnected,
-			Sender: sender,
+			Sender: client,
 		}
 
 		conn.Close()
@@ -41,23 +36,19 @@ func handleConnection(conn *websocket.Conn, messages chan Message) {
 
 	messages <- Message{
 		Type:   ClientConnected,
-		Sender: sender,
+		Sender: client,
 	}
 
 	for {
-		_, data, err := conn.ReadMessage()
+		_, data, err := client.conn.ReadMessage()
 		if err != nil {
-			//if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-			//	return
-			//}
-
 			return
 		}
 
 		messages <- Message{
 			Type:   NewMessage,
 			Text:   string(data),
-			Sender: sender,
+			Sender: client,
 		}
 	}
 }
@@ -66,10 +57,7 @@ func handleUpgrade(messages chan Message) func(w http.ResponseWriter, r *http.Re
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf(
-				"Failed to upgrade connection from %s: %s\n",
-				conn.RemoteAddr().String(), err,
-			)
+			log.Printf("failed to upgrade connection: %s\n", err)
 			return
 		}
 
@@ -83,14 +71,7 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%s", host, *port)
 
-	room := NewRoom(&RoomSettings{
-		MessageLimit:        1.0,
-		CooldownTime:        30.0,
-		CooldownHitsLimit:   5,
-		CooldownHitsBanTime: 5 * time.Second,
-		MaxClients:          10,
-	})
-
+	room := NewRoom(nil)
 	go room.Serve()
 
 	http.HandleFunc("/", handleUpgrade(room.Messages))
@@ -99,6 +80,6 @@ func main() {
 
 	err := http.ListenAndServe(addr, nil)
 	if err != nil {
-		log.Fatalf("Failed to listen http on %s: %s", addr, err)
+		log.Fatalf("failed to listen http on %s: %s", addr, err)
 	}
 }

@@ -2,13 +2,23 @@ package main
 
 import (
 	"fmt"
-	"github.com/gofrs/uuid"
-	"github.com/gorilla/websocket"
 	"log"
+	"sync"
 	"time"
+
+	"github.com/gofrs/uuid"
 )
 
 type MessageType int
+
+var defaultSettings = &RoomSettings{
+	MessageLimit:        1.0,
+	CooldownTime:        10.0,
+	CooldownHitsLimit:   10,
+	CooldownHitsBanTime: 1 * time.Minute,
+	MaxClients:          50,
+	DefaultBanReason:    "unknown",
+}
 
 const (
 	ClientConnected MessageType = iota
@@ -28,22 +38,29 @@ type RoomSettings struct {
 	CooldownHitsLimit   int
 	CooldownHitsBanTime time.Duration
 	MaxClients          int
+	DefaultBanReason    string
 }
 
 type Room struct {
 	Clients       map[uuid.UUID]*Client
 	BannedClients map[ClientIP]time.Time
 	Messages      chan Message
+	Settings      *RoomSettings
 
-	Settings *RoomSettings
+	mu *sync.Mutex
 }
 
 func NewRoom(settings *RoomSettings) *Room {
+	if settings == nil {
+		settings = defaultSettings
+	}
+
 	return &Room{
 		Clients:       make(map[uuid.UUID]*Client),
 		BannedClients: make(map[ClientIP]time.Time),
 		Messages:      make(chan Message),
 		Settings:      settings,
+		mu:            &sync.Mutex{},
 	}
 }
 
@@ -64,8 +81,8 @@ func (r *Room) Serve() {
 
 func (r *Room) handleConnect(msg Message) {
 	if len(r.Clients) == r.Settings.MaxClients {
-		msg.Sender.Conn.WriteMessage(websocket.TextMessage, []byte("Room is full"))
-		msg.Sender.Conn.Close()
+		msg.Sender.WriteClose("Room is full, try to connect later")
+		return
 	}
 
 	bannedUntil, isBanned := r.BannedClients[msg.Sender.IP()]
@@ -73,14 +90,14 @@ func (r *Room) handleConnect(msg Message) {
 		secondsLeft := bannedUntil.Sub(time.Now()).Seconds()
 
 		if secondsLeft <= 0 {
-			r.unbanClient(msg.Sender.IP())
+			r.UnbanClient(msg.Sender.IP())
 		} else {
 			message := fmt.Sprintf(
 				"You are banned from this room. %d seconds left",
 				int(secondsLeft),
 			)
-			msg.Sender.Conn.WriteMessage(websocket.TextMessage, []byte(message))
-			msg.Sender.Conn.Close()
+
+			msg.Sender.WriteClose(message)
 			return
 		}
 	}
@@ -108,7 +125,8 @@ func (r *Room) handleNewMessage(msg Message) {
 	}
 
 	if msg.Text == sender.LastMessageText {
-		if sender.CooldownMessage == "" {
+		if !sender.HasCooldown {
+			sender.HasCooldown = true
 			sender.CooldownMessage = msg.Text
 			sender.CooldownStart = time.Now()
 			return
@@ -118,44 +136,41 @@ func (r *Room) handleNewMessage(msg Message) {
 			sender.CooldownHits += 1
 
 			if sender.CooldownHits >= r.Settings.CooldownHitsLimit {
-				r.banClient(sender, r.Settings.CooldownHitsBanTime, "spamming")
+				r.BanClient(
+					sender,
+					r.Settings.CooldownHitsBanTime,
+					"spamming during cooldown",
+				)
 			}
-
 			return
 		}
 
-		sender.CooldownMessage = ""
+		sender.HasCooldown = false
 	}
 
 	sender.LastMessageTime = time.Now()
 	sender.LastMessageText = msg.Text
 
-	log.Printf(
-		"Broadcasting message from %s: %s\n",
-		sender.ID, msg.Text,
-	)
+	log.Printf("Broadcasting message from %s\n", sender.ID)
 
 	for _, client := range r.Clients {
 		if client.ID == sender.ID {
 			continue
 		}
 
-		err := client.Conn.WriteMessage(websocket.TextMessage, []byte(msg.Text))
-		if err != nil {
-			log.Printf(
-				"Failed to send message to %s: %s\n",
-				client.ID, err,
-			)
-			client.Conn.Close()
-		}
+		client.MustWrite(msg.Text)
 	}
 }
 
-func (r *Room) banClient(
+func (r *Room) BanClient(
 	client *Client,
 	duration time.Duration,
 	reason string,
 ) {
+	if len(reason) == 0 {
+		reason = r.Settings.DefaultBanReason
+	}
+
 	r.BannedClients[client.IP()] = time.Now().Add(duration)
 
 	log.Printf(
@@ -164,18 +179,13 @@ func (r *Room) banClient(
 	)
 
 	banMessage := fmt.Sprintf(
-		"You have been banned. Reason: %s, Duration: %s",
+		"You have been banned from this room. Reason: %s, Duration: %s",
 		reason, duration,
 	)
 
-	_ = client.Conn.WriteMessage(
-		websocket.TextMessage,
-		[]byte(banMessage),
-	)
-
-	client.Conn.Close()
+	client.WriteClose(banMessage)
 }
 
-func (r *Room) unbanClient(clientIP ClientIP) {
+func (r *Room) UnbanClient(clientIP ClientIP) {
 	delete(r.BannedClients, clientIP)
 }
