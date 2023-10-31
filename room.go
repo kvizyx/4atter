@@ -85,9 +85,9 @@ func (r *Room) handleConnect(msg Message) {
 		return
 	}
 
-	bannedUntil, isBanned := r.BannedClients[msg.Sender.IP()]
+	banEnd, isBanned := r.BannedClients[msg.Sender.IP()]
 	if isBanned {
-		secondsLeft := bannedUntil.Sub(time.Now()).Seconds()
+		secondsLeft := time.Until(banEnd).Seconds()
 
 		if secondsLeft <= 0 {
 			r.UnbanClient(msg.Sender.IP())
@@ -120,7 +120,7 @@ func (r *Room) handleNewMessage(msg Message) {
 		return
 	}
 
-	if time.Now().Sub(sender.LastMessageTime).Seconds() < r.Settings.MessageLimit {
+	if time.Since(sender.LastMessageTime).Seconds() < r.Settings.MessageLimit {
 		return
 	}
 
@@ -132,7 +132,7 @@ func (r *Room) handleNewMessage(msg Message) {
 			return
 		}
 
-		if time.Now().Sub(sender.CooldownStart).Seconds() < r.Settings.CooldownTime {
+		if time.Since(sender.CooldownStart).Seconds() < r.Settings.CooldownTime {
 			sender.CooldownHits += 1
 
 			if sender.CooldownHits >= r.Settings.CooldownHitsLimit {
