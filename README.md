@@ -1,6 +1,6 @@
-# ws4at
+# 4atter
 
-Simple multiuser chat built on websockets (inspired by [Tsoding's](https://twitch.tv/tsoding) chat development stream).
+Simple chat built for experiments on websockets (inspired by the [Tsoding's](https://twitch.tv/tsoding) chat development stream).
 
 # How to launch
 ```console
